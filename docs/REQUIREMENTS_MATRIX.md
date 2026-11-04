@@ -34,5 +34,35 @@ rows consolidate requirements exercised by the same behavior rather than duplica
 | B2-RES-04 / 2 | Classified bounded retries, exponential backoff, optional jitter, deadline | `TokenService.cs` / `InvokeSdkAsync` | `ResilienceTests` / retry classification/budget; `OperationalTests` / exponential backoff and shutdown | Verified; jitter is optional nondeterministic load spreading | `PRODUCTION_RESILIENCE.md` |
 | B2-CANCEL-01 / 2 | Caller-only wait cancellation, shared lifetime, shutdown/drain | `TokenService.cs` / `AcquireAsync`, `DisposeAsync` | `FoundationTests` / `Canceled_initiator_does_not_cancel_shared_acquisition`; `ResilienceTests` / all waiters cancel and shutdown | Verified intentional semantic evolution | `BRANCH_01_VS_02.md` |
 | B2-OBS-01 / 2 | Fixed structured events, latency, no token/exception logs | `Resilience.cs` / `TokenTelemetry` | `ResilienceTests` / metrics test; `OperationalTests` / secret-payload logging test | Verified | `OBSERVABILITY.md` |
-| B3-LEASE-01 / 3 | Lease, fencing, conditional write | Planned extension | Branch 1 demonstrates why needed | Documented limitation only | `RACE_CONDITIONS.md` |
-| B3-VERSION-01 / 3 | Versions, invalidation, HybridCache comparison | Planned extension | Not present on branch 1 | Deferred to branch 3 | `INTERVIEW_GUIDE.md` |
+| B3-LEASE-01 / 3 | Leader/follower, recheck, healthy cross-instance coalescing | `DistributedPolicy.cs` / `FillAsync` | `DistributedTests` / `Two_instances_elect_leader_and_follower_rechecks_L2`; `InvalidationTests` / one-key multi-instance stress | Verified simulation | `DISTRIBUTED_COORDINATION.md` |
+| B3-LEASE-02 / 3 | Expiry, stalled/failed leader, safe release, cancellation | `InMemoryDistributedStore.cs` / `TryAcquireAsync`, `ReleaseAsync`; `DistributedPolicy` / `finally` | `DistributedTests` / expired leader, failed leader, safe release, canceled follower; `InvalidationTests` / shutdown follower | Verified simulation | `DISTRIBUTED_COORDINATION.md` |
+| B3-FENCE-01 / 3 | Monotonic atomic fences and stale/expired writer rejection | `InMemoryDistributedStore.cs` / `ReserveFenceAsync`, `TryWriteAsync` | `DistributedTests` / conditional out-of-order writes, concurrent fence allocation/writes, lease expiry before successor write | Verified simulation | `DISTRIBUTED_COORDINATION.md` |
+| B3-FENCE-02 / 3 | Conditional write failure is explicit; leases optional | `DistributedPolicy.cs` / `FillAsync` | `DistributedTests` / conditional write failure; `InvalidationTests` / fenced writes without leases | Verified simulation | `CONSISTENCY_MODEL.md` |
+| B3-VERSION-01 / 3 | Atomic generation increment and 5-versus-6 stale-fill race | `InMemoryDistributedStore.cs` / `InvalidateAsync`, `TryWriteAsync` | `DistributedTests` / atomic generations, exact generation-five race | Verified simulation | `VERSION_STAMPS.md` |
+| B3-VERSION-02 / 3 | Missing metadata, unavailable/timed-out authority, explicit fallback | `DistributedPolicy.cs` / `GenerationAsync`, `CallAsync`; `TokenService` / fallback | `DistributedTests` / missing, unavailable, timeout, availability policy tests | Verified | `VERSION_STAMPS.md` |
+| B3-CANCEL-01 / 3 | Shutdown also cancels authority lookup before any flight exists | `TokenService.cs` / `AcquireAsync` caller lifetime | `DistributedTests` / `Shutdown_cancels_version_lookup_before_a_shared_flight_exists` | Verified | `PRODUCTION_RESILIENCE.md` |
+| B3-VERSION-03 / 3 | Optional local version lease, expiry, mismatch, stale window | `DistributedPolicy.cs` / `GenerationAsync` | `DistributedTests` / local lease staleness/recovery, valid lease during outage, disabled per-hit validation | Verified simulation, conditional observation bound | `VERSION_STAMPS.md` |
+| B3-VERSION-04 / 3 | Delayed local fill cannot replace greater metadata | `TokenService.cs` / `WriteLocal` | `InvalidationTests` / `Delayed_old_local_fill_cannot_replace_newer_generation` | Verified | `DISTRIBUTED_COORDINATION.md` |
+| B3-INVALIDATE-01 / 3 | Key invalidation, local eviction, notifications | `TokenService.cs` / `InvalidateAsync`, `EvictLocal`; bus / `PublishAsync` | `InvalidationTests` / delivered notification test | Verified simulation | `INVALIDATION.md` |
+| B3-INVALIDATE-02 / 3 | Missed, duplicate, out-of-order, disconnected notification handling | `InMemoryInvalidationBus.cs`; `DistributedPolicy.cs` | `InvalidationTests` / duplicate/out-of-order, disconnected lease repair, TTL-only recovery | Verified simulation; not durable delivery | `INVALIDATION.md` |
+| B3-SEC-01 / 3 | Multi-instance tenant isolation, restart, SDK failure | `TokenService.cs`, `DistributedPolicy.cs` | `DistributedTests` / parallel tenants, restart, failed leader | Verified | `DISTRIBUTED_SECURITY.md` |
+| B3-SEC-02 / 3 | Secret-free distributed diagnostics, invalid/malformed results rejected | `TokenTelemetry`, `TokenService.Validate`, `DistributedPolicy.ReadAsync` | `DistributedObservabilityTests` / three diagnostic and malformed-result tests | Verified | `DISTRIBUTED_SECURITY.md` |
+| B3-OBS-01 / 3 | Lease, fence rejection, mismatch, authority, invalidation, fallback events | `DistributedPolicy.cs` / telemetry calls | `DistributedObservabilityTests` / captured events; protocol tests trigger rejection/recovery | Verified | `OBSERVABILITY.md` |
+| B3-HYBRID-01 / 3 | Official API/source investigation and runnable package comparison | Test-only package 10.0.0, `HybridCacheComparisonTests.cs` | Four tests: local stampede, cross-instance misses, serialized L2, one canceled waiter | Verified pinned package; no incomplete token adapter | `HYBRID_CACHE_COMPARISON.md` |
+| B3-DOC-01 / 3 | Consistency, security assumptions, Redis Pub/Sub/durable alternatives | `docs/` | Manual review plus protocol tests | Documented; real adapters/deployment controls explicitly out of scope | `CONSISTENCY_MODEL.md`, `INVALIDATION.md`, `BRANCH_COMPARISON.md` |
+
+### Historical references
+
+The B1-CON-03 test is present on the foundation branch. Branch 2 intentionally replaces owner-driven
+cancellation/gate retries with `Canceled_initiator_does_not_cancel_shared_acquisition` and tests
+shared-flight cleanup. Branch 3's leader/follower test verifies L2 rechecking under distributed
+contention. Earlier branch-specific methods are preserved in Git history, not falsely attributed
+to the current shared-task implementation.
+
+### Explicit limitations (not omitted features)
+
+No real distributed-cache, issuer, broker, encryption service, or protected credential adapter is
+implemented. Their abstractions/simulations satisfy the infrastructure-free scope, not deployment
+readiness. Exactly-once issuance, issuer revocation, unbounded staleness guarantees under partitions,
+and forced termination of uncooperative SDK code are not promised. HybridCache is evaluated with
+actual package tests and official sources rather than shipping a partial alternative token adapter.

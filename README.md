@@ -68,7 +68,7 @@ There is no exactly-once or issuer-revocation guarantee.
 
 Start with [architecture](docs/ARCHITECTURE.md) and the [interview guide](docs/INTERVIEW_GUIDE.md).
 
-## Current branch: production resilience
+## Production resilience (preserved in Branch 3)
 
 Shared-task singleflight isolates caller cancellation. Service-owned timeouts/shutdown bound fills,
 admission limits bound pending keys, and SDK permits remain held until actual completion.
@@ -77,3 +77,16 @@ or strict cache policy. Use async disposal to cancel and drain cooperative adapt
 See [production resilience](docs/PRODUCTION_RESILIENCE.md),
 [observability](docs/OBSERVABILITY.md), and the [requirements matrix](docs/REQUIREMENTS_MATRIX.md).
 These controls do not fix cross-instance last-writer-wins races.
+
+## Optional distributed coordination (Branch 3)
+
+Pass `DistributedConfiguration` to opt into atomic generation/fence writes, optional leader
+leases, optional version-validated reads/local version leases, and optional lossy invalidation
+notifications. The ordinary path does not perform distributed version lookups.
+See [integration example and protocol](docs/DISTRIBUTED_COORDINATION.md),
+[consistency guarantees](docs/CONSISTENCY_MODEL.md), [version policies](docs/VERSION_STAMPS.md),
+and [HybridCache evidence](docs/HYBRID_CACHE_COMPARISON.md).
+
+The in-memory distributed store/bus are explicitly demonstration adapters. No Redis, issuer,
+Docker, web application, or real credentials are needed to run tests. Production adapters must
+implement the same atomic authority operations and protect stored tokens.

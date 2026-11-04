@@ -61,7 +61,8 @@ public sealed record TokenResult(string AccessToken, DateTimeOffset ExpiresAt)
     public override string ToString() => $"TokenResult {{ ExpiresAt = {ExpiresAt:O}, AccessToken = [REDACTED] }}";
 }
 
-public sealed record CacheEnvelope(string CacheKey, TokenResult Token, DateTimeOffset CacheUntil);
+public sealed record CacheEnvelope(string CacheKey, TokenResult Token, DateTimeOffset CacheUntil,
+    long Generation = 0, long Fence = 0);
 
 public interface ITokenSdk
 {

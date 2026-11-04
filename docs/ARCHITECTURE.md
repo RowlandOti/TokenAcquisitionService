@@ -101,3 +101,33 @@ The five correctness decisions have dedicated documents:
 [concurrency](CONCURRENCY.md), [races](RACE_CONDITIONS.md),
 [failures](FAILURE_BEHAVIOR.md). The implementation makes no attempt to parse JWTs or implement
 OAuth, issuance, signing, or an identity provider.
+
+## Branch 3 optional path
+
+```mermaid
+flowchart TD
+    Request --> Config{Distributed configuration?}
+    Config -->|absent| Original[Original L1/L2 shared-flight path]
+    Config -->|present| Version[Optional per-hit version validation]
+    Version --> Local[Fresh matching L1]
+    Version --> Fill[Shared flight per context and generation]
+    Fill --> Store[Versioned L2]
+    Fill --> Lease[Optional lease and monotonic fence]
+    Lease --> Recheck[Recheck L2 and generation]
+    Recheck --> SDK[Existing bounded SDK path]
+    SDK --> CAS[Atomic conditional write]
+    CAS --> L1[Metadata-ordered L1 fill]
+    Invalidator --> Epoch[Atomic epoch advance, clear and fence]
+    Epoch --> Notify[Optional notification hints]
+    Notify --> Evict[Evict local token and version lease]
+```
+
+`Distributed/` contains narrow authority, conditional-cache, lease, and notification contracts,
+the orchestration policy, and clearly marked in-memory demonstration adapters. The policy owns
+only local version-lease state/subscription. `TokenService` retains its existing shared-flight,
+SDK capacity, shutdown, expiration, and telemetry responsibilities. Configuration is constructor
+injected, not selected through static/global state.
+
+`TokenExpirationPolicy` centralizes freshness and deadline calculation for both paths; the
+distributed extension does not duplicate or relax token validity rules. Public authority lookups
+also link caller and shutdown cancellation, even before a shared fill exists.

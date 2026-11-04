@@ -10,14 +10,18 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     private readonly ITokenCache _l2;
     private readonly TimeProvider _time;
     private readonly TokenCacheOptions _options;
+    private readonly TokenExpirationPolicy _expiration;
     private readonly ResilienceOptions _resilience;
     private readonly TokenTelemetry _telemetry;
     private readonly L2Circuit _circuit;
+    private readonly DistributedPolicy? _distributed;
     private readonly MemoryCache _l1 = new(new MemoryCacheOptions { SizeLimit = 10_000 });
+    private readonly object[] _localWriteStripes = Enumerable.Range(0, 64).Select(_ => new object()).ToArray();
     private readonly ConcurrentDictionary<string, Flight> _flights = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _sdkSlots;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // Owning reference, caller waits, and physical workers keep resources alive through cancellation.
     private int _activities = 1;
     private int _disposed;
     private int _cleaned;
@@ -26,7 +30,8 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     public int ActiveFlightCount => _flights.Count;
 
     public TokenService(ITokenSdk sdk, ITokenCache l2, TimeProvider timeProvider,
-        TokenCacheOptions options, ILogger<TokenService> logger, ResilienceOptions? resilience = null)
+        TokenCacheOptions options, ILogger<TokenService> logger, ResilienceOptions? resilience = null,
+        DistributedConfiguration? distributed = null)
     {
         options.Validate();
         _resilience = resilience ?? new ResilienceOptions();
@@ -35,9 +40,15 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         _l2 = l2;
         _time = timeProvider;
         _options = options;
+        _expiration = new(timeProvider, options);
         _telemetry = new(logger);
         _circuit = new(timeProvider, _resilience, _telemetry);
         _sdkSlots = new(_resilience.MaximumConcurrentSdkCalls, _resilience.MaximumConcurrentSdkCalls);
+        if (distributed is not null)
+        {
+            _distributed = new(distributed, timeProvider, options, _expiration, _telemetry);
+            _distributed.Invalidated += EvictLocal;
+        }
     }
 
     public async Task<TokenResult> AcquireAsync(TokenRequest request, CancellationToken cancellationToken = default)
@@ -47,25 +58,62 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             ArgumentNullException.ThrowIfNull(request);
+            using var callerLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+            cancellationToken = callerLifetime.Token;
             cancellationToken.ThrowIfCancellationRequested();
             var key = request.CacheKey;
-            if (ReadLocal(key) is { } local) return Validate(local);
-            if (!_flights.TryGetValue(key, out var flight))
+            var forceUncached = false;
+            for (var attempt = 0; ; attempt++)
             {
-                if (Interlocked.Increment(ref _pendingKeys) > _resilience.MaximumPendingKeys)
+                var generation = forceUncached ? -1L : 0L;
+                if (_distributed is not null && !forceUncached)
                 {
-                    Interlocked.Decrement(ref _pendingKeys);
-                    _telemetry.Record("capacity_throttle", true);
-                    throw new AcquisitionCapacityException();
+                    try { generation = await _distributed.GenerationAsync(key, cancellationToken).ConfigureAwait(false); }
+                    catch (DistributedDependencyException) when (
+                        _distributed.Options.FailurePolicy == DistributedFailurePolicy.FreshSdkWithoutCaching)
+                    {
+                        _telemetry.Record("distributed_fallback", true);
+                        generation = -1;
+                    }
                 }
-                var candidate = new Flight(this, request, key);
-                flight = _flights.GetOrAdd(key, candidate);
-                if (!ReferenceEquals(flight, candidate)) Interlocked.Decrement(ref _pendingKeys);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (generation >= 0 && ReadLocal(key, generation) is { } local) return Validate(local);
+                var flightKey = $"{key}@{generation}";
+                if (!_flights.TryGetValue(flightKey, out var flight))
+                {
+                    if (Interlocked.Increment(ref _pendingKeys) > _resilience.MaximumPendingKeys)
+                    {
+                        Interlocked.Decrement(ref _pendingKeys);
+                        _telemetry.Record("capacity_throttle", true);
+                        throw new AcquisitionCapacityException();
+                    }
+                    var candidate = new Flight(this, request, key, flightKey, generation);
+                    flight = _flights.GetOrAdd(flightKey, candidate);
+                    if (!ReferenceEquals(flight, candidate)) Interlocked.Decrement(ref _pendingKeys);
+                }
+                if (flight.Work.IsValueCreated) _telemetry.Record("lock_contention");
+                try
+                {
+                    var envelope = await flight.Work.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (_distributed is not null && envelope.Generation > 0 && _distributed.Options.ValidateVersions
+                        && await _distributed.GenerationAsync(key, cancellationToken).ConfigureAwait(false) != envelope.Generation)
+                        throw new CacheConsistencyException();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return Validate(envelope.Token);
+                }
+                catch (CacheConsistencyException) when (_distributed is not null
+                    && attempt < _distributed.Options.MaximumConsistencyRetries)
+                {
+                    _telemetry.Record("invalidation_recovery");
+                }
+                catch (DistributedDependencyException) when (_distributed?.Options.FailurePolicy
+                    == DistributedFailurePolicy.FreshSdkWithoutCaching)
+                {
+                    _telemetry.Record("distributed_fallback", true);
+                    forceUncached = true;
+                }
             }
-            if (flight.Work.IsValueCreated) _telemetry.Record("lock_contention");
-            var token = await flight.Work.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            return Validate(token);
         }
         catch (OperationCanceledException)
         {
@@ -78,10 +126,14 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     private sealed class Flight
     {
         public string Key { get; }
-        public Lazy<Task<TokenResult>> Work { get; }
-        public Flight(TokenService owner, TokenRequest request, string key)
+        public string FlightKey { get; }
+        public long Generation { get; }
+        public Lazy<Task<CacheEnvelope>> Work { get; }
+        public Flight(TokenService owner, TokenRequest request, string key, string flightKey, long generation)
         {
             Key = key;
+            FlightKey = flightKey;
+            Generation = generation;
             Work = new(() =>
             {
                 var task = owner.RunFlightAsync(this, request);
@@ -91,7 +143,7 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         }
     }
 
-    private async Task<TokenResult> RunFlightAsync(Flight flight, TokenRequest request)
+    private async Task<CacheEnvelope> RunFlightAsync(Flight flight, TokenRequest request)
     {
         Interlocked.Increment(ref _activities);
         try
@@ -100,7 +152,29 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token, timeout.Token);
             try
             {
-                return await FillAsync(flight.Key, request, linked.Token).ConfigureAwait(false);
+                if (_distributed is null)
+                {
+                    var legacy = await FillAsync(flight.Key, request, linked.Token).ConfigureAwait(false);
+                    return new(flight.Key, legacy, Until(legacy, _options.L2MaximumTtl));
+                }
+                if (flight.Generation >= 0)
+                {
+                    try
+                    {
+                        var entry = await _distributed.FillAsync(flight.Key, flight.Generation,
+                            ct => AcquireSdkAsync(request, ct), linked.Token).ConfigureAwait(false);
+                        Validate(entry.Token);
+                        WriteLocal(flight.Key, entry.Token, entry.CacheUntil, entry.Generation, entry.Fence);
+                        return entry;
+                    }
+                    catch (DistributedDependencyException) when (
+                        _distributed.Options.FailurePolicy == DistributedFailurePolicy.FreshSdkWithoutCaching)
+                    {
+                        _telemetry.Record("distributed_fallback", true);
+                    }
+                }
+                var uncached = await AcquireSdkAsync(request, linked.Token).ConfigureAwait(false);
+                return new(flight.Key, uncached, Until(uncached, _options.L2MaximumTtl), -1);
             }
             catch (OperationCanceledException) when (!_shutdown.IsCancellationRequested && timeout.IsCancellationRequested)
             {
@@ -110,7 +184,8 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         }
         finally
         {
-            _flights.TryRemove(new KeyValuePair<string, Flight>(flight.Key, flight));
+            // A completed worker must never remove a replacement flight for the same key.
+            _flights.TryRemove(new KeyValuePair<string, Flight>(flight.FlightKey, flight));
             Interlocked.Decrement(ref _pendingKeys);
             ExitActivity();
         }
@@ -139,9 +214,7 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
             return Validate(remote.Token);
         }
         _telemetry.Record("miss");
-        var sdkTask = InvokeSdkAsync(request, cancellationToken);
-        L2Circuit.Observe(sdkTask);
-        var token = Validate(await sdkTask.WaitAsync(cancellationToken).ConfigureAwait(false));
+        var token = await AcquireSdkAsync(request, cancellationToken).ConfigureAwait(false);
         var envelope = new CacheEnvelope(key, token, Until(token, _options.L2MaximumTtl));
         try
         {
@@ -161,6 +234,13 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         Validate(token);
         WriteLocal(key, token, envelope.CacheUntil);
         return Validate(token);
+    }
+
+    private async Task<TokenResult> AcquireSdkAsync(TokenRequest request, CancellationToken cancellationToken)
+    {
+        var sdkTask = InvokeSdkAsync(request, cancellationToken);
+        L2Circuit.Observe(sdkTask);
+        return Validate(await sdkTask.WaitAsync(cancellationToken).ConfigureAwait(false));
     }
 
     private async Task<TokenResult> InvokeSdkAsync(TokenRequest request, CancellationToken cancellationToken)
@@ -206,28 +286,28 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         }
     }
 
-    private TokenResult? ReadLocal(string key)
+    private TokenResult? ReadLocal(string key, long generation = 0)
     {
-        if (_l1.TryGetValue<CacheEnvelope>(key, out var entry) && IsUsable(entry, key))
+        if (!_l1.TryGetValue<CacheEnvelope>(key, out var entry) || !IsUsable(entry, key)) return null;
+        if (generation != 0 && entry!.Generation != generation)
         {
-            _telemetry.Record("l1_hit");
-            return entry!.Token;
+            _telemetry.Record("version_mismatch");
+            return null;
         }
-        return null;
+        _telemetry.Record("l1_hit");
+        return entry!.Token;
     }
 
     private bool IsUsable(CacheEnvelope? entry, string key)
     {
-        var usable = entry is not null && entry.CacheKey == key && entry.CacheUntil > _time.GetUtcNow()
-        && !string.IsNullOrWhiteSpace(entry.Token.AccessToken)
-        && entry.Token.ExpiresAt - _time.GetUtcNow() > _options.SafetyBuffer;
+        var usable = _expiration.IsUsable(entry, key);
         if (entry is not null && !usable) _telemetry.Record("freshness_rejection");
         return usable;
     }
 
     private TokenResult Validate(TokenResult token)
     {
-        if (string.IsNullOrWhiteSpace(token.AccessToken) || token.ExpiresAt - _time.GetUtcNow() <= _options.SafetyBuffer)
+        if (!_expiration.IsFresh(token))
         {
             _telemetry.Record("freshness_rejection");
             throw new UnusableTokenException();
@@ -236,22 +316,59 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     }
 
     private DateTimeOffset Until(TokenResult token, TimeSpan maximumTtl) =>
-        Min(token.ExpiresAt - _options.SafetyBuffer, _time.GetUtcNow() + maximumTtl);
+        _expiration.Until(token, maximumTtl);
 
-    private void WriteLocal(string key, TokenResult token, DateTimeOffset remoteUntil)
+    private void WriteLocal(string key, TokenResult token, DateTimeOffset remoteUntil, long generation = 0, long fence = 0)
     {
-        var until = Min(Until(token, _options.L1MaximumTtl), remoteUntil);
+        var until = TokenExpirationPolicy.Min(Until(token, _options.L1MaximumTtl), remoteUntil);
         var ttl = until - _time.GetUtcNow();
-        if (ttl > TimeSpan.Zero)
-            _l1.Set(key, new CacheEnvelope(key, token, until),
+        if (ttl <= TimeSpan.Zero) return;
+        // Fixed stripes only cover an in-memory compare/set, never I/O or acquisition.
+        // Different generation flights may overlap; a delayed old fill must not replace a newer L1.
+        var stripe = _localWriteStripes[(uint)StringComparer.Ordinal.GetHashCode(key) % (uint)_localWriteStripes.Length];
+        lock (stripe)
+        {
+            if (_l1.TryGetValue<CacheEnvelope>(key, out var existing)
+                && (existing!.Generation > generation || (existing.Generation == generation && existing.Fence > fence)))
+                return;
+            _l1.Set(key, new CacheEnvelope(key, token, until, generation, fence),
                 new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl, Size = 1 });
+        }
     }
 
-    private static DateTimeOffset Min(DateTimeOffset left, DateTimeOffset right) => left < right ? left : right;
+    public async Task InvalidateAsync(TokenRequest request, CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref _activities);
+        try
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            ArgumentNullException.ThrowIfNull(request);
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+            if (_distributed is null) throw new InvalidOperationException("Distributed features are not configured.");
+            await _distributed.InvalidateAsync(request.CacheKey, lifetime.Token).ConfigureAwait(false);
+        }
+        finally { ExitActivity(); }
+    }
+
+    private void EvictLocal(string key)
+    {
+        Interlocked.Increment(ref _activities);
+        try
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                _telemetry.Record("invalidation_received");
+                _distributed?.ForgetVersion(key);
+                _l1.Remove(key);
+            }
+        }
+        finally { ExitActivity(); }
+    }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (_distributed is not null) _distributed.Invalidated -= EvictLocal;
         try { _shutdown.Cancel(); }
         finally { ExitActivity(); }
     }
@@ -267,6 +384,7 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         if (Interlocked.Decrement(ref _activities) != 0 || Volatile.Read(ref _disposed) == 0
             || Interlocked.Exchange(ref _cleaned, 1) != 0) return;
         _l1.Dispose();
+        _distributed?.Dispose();
         _sdkSlots.Dispose();
         _shutdown.Dispose();
         _telemetry.Dispose();

@@ -2,8 +2,9 @@
 
 Branch 1 asks **Is my implementation correct?** Branch 2 asks **Does it remain reliable under
 load and failure?** Branch 3 asks **What guarantees can multiple coordinating instances provide?**
-Advanced questions below describe planned extensions when reading Branch 1. In Branch 2,
-resource/cancellation/resilience extensions are implemented; distributed ones remain planned.
+Advanced questions describe planned extensions when reading Branch 1. Branch 2 implements the
+operational extensions; Branch 3 implements the optional distributed path and executable
+HybridCache comparison. Historical answers identify which branch's guarantees are being discussed.
 
 Locations abbreviate `src/TokenAcquisitionService/`; tests are in
 `tests/TokenAcquisitionService.Tests/FoundationTests.cs` unless otherwise noted.
@@ -82,6 +83,34 @@ Locations abbreviate `src/TokenAcquisitionService/`; tests are in
 | Which failures retry? | Only adapter-classified `TransientTokenException`, bounded attempts. | `Classified_transient_sdk_failure_retries_but_permanent_failure_does_not` | Provider-specific classifier adds coupling. | Auth failure; what makes retry safe? |
 
 ### Next changes
+
+### Branch 3 advanced follow-up
+
+| Question | Strong technical answer / code | Relevant test | Alternative and trade-off | Failure scenario / follow-up |
+|---|---|---|---|---|
+| What does lease ownership mean? | `LeaseGrant` identifies one current unexpired grant; it cannot stop old SDK execution. | `Expired_leader_cannot_overwrite_newer_fence_or_release_replacement_lease` | Long leases reduce overlap but delay failure recovery. | Leader stalls; renewal or fencing? |
+| How is compare-and-swap atomic? | `TryWriteAsync` checks generation, fence, ownership and replacement inside one per-key store transaction. | `Concurrent_fence_allocation_and_writes_are_atomic` | Client read-then-write is not atomic. | Two writers race; where must the predicate execute? |
+| What does a fence order? | Cache write authority, not issuer timestamps or expiration. | `Atomic_conditional_writes_reject_out_of_order_generations_not_expiration_order` | Issuer generation would be stronger domain metadata. | Older long-lived token; why not compare expiry? |
+| What happens between generations 5 and 6? | `InvalidateAsync` advances epoch and fences pending fills; old fill cannot commit. | `Generation_five_fill_cannot_become_authoritative_after_generation_six_invalidation` | Versioned physical keys need epoch lookup and GC. | SDK finishes after invalidate; retry budget? |
+| Does strict validation make return atomic? | No; invalidation can commit just after the observed authority snapshot. | `Version_mismatch_rejects_stale_L1_and_rehydrates_new_generation` | Stronger application transactions require another boundary. | Already returned token; can it be revoked here? |
+| Is a ten-second version lease universally safe? | It permits a conditional observation window, not a universal bound under stale authority/partitions. | `Local_version_lease_allows_documented_staleness_then_recovers` | Per-read authority costs availability/latency. | Authority rollback; what does durability require? |
+| What if authority disappears? | `GenerationAsync` fails closed by default; optional fresh SDK fallback uses no cached values/writes. | `Version_authority_failure_is_fail_closed_even_with_fresh_L1`, availability policy test | Serving known stale cache improves availability but weakens invalidation. | Cache/authority partition; which policy matches the product? |
+| What if metadata is absent? | Known missing metadata is an error; pristine keys initialize atomically at the authority. | `Missing_version_metadata_is_not_treated_as_a_valid_default` | Namespace epochs can safely retire authority state. | TTL deletes version key; why is reset dangerous? |
+| Do duplicate notifications regress state? | Notifications only evict, never install a purported authority version. | `Duplicate_and_out_of_order_notifications_do_not_regress_authoritative_generation` | Dedup watermarks reduce redundant evictions but cost state. | Out-of-order delivery; can a hint be authoritative? |
+| Does reconnect replay Pub/Sub? | No; version checks or TTL repair missed invalidations. | `Disconnected_still_running_instance_misses_notification_and_recovers_after_version_lease` | Durable per-subscriber logs add offsets/retention. | One Redis Streams group; broadcast or competing consumers? |
+| Can old local fills regress L1? | `WriteLocal` compares epoch/fence under fixed short local stripes. | `Delayed_old_local_fill_cannot_replace_newer_generation` | Per-key persistent locks add cardinality costs. | New generation fills while old release waits; why no global I/O lock? |
+| Why not replace everything with HybridCache? | It handles local coalescing/serialization, not this custom distributed authority protocol. | Four `HybridCacheComparisonTests` | Framework simplifies common caching but needs token freshness and dynamic TTL policy. | Factory returns a near-expired token; can static options suffice? |
+
+### Current branch source-study order
+
+1. `Contracts.cs`, then canonical identity and expiration tests.
+2. `TokenService.cs`: caller wait vs shared flight vs physical SDK lifetime.
+3. `Resilience.cs`: fixed telemetry, deadlines, circuit state, retry classification.
+4. `Distributed/DistributedContracts.cs` and `InMemoryDistributedStore.cs`: atomic boundaries.
+5. `Distributed/DistributedPolicy.cs`, then 5/6 race, missed notification, and HybridCache tests.
+
+For a Branch 3 review use minutes 0-10 for the foundation, 10-17 for shared lifetime/resilience,
+17-25 for leases/fences/versions and a race test, and 25-30 for failure assumptions and alternatives.
 
 This heading interprets the truncated heading in the supplied task; it is not an extra product
 requirement. Start with safe flight reclamation and shutdown, deadlines, bounded issuer concurrency,

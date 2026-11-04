@@ -1,5 +1,10 @@
 # D. Race conditions
 
+**Branch 3 update:** the foundation limitations below still apply to the unconfigured path.
+Optional [distributed coordination](DISTRIBUTED_COORDINATION.md) now implements conditional
+generation/fence writes and ownership-safe leases. The original older-over-newer race test still
+demonstrates the uncoordinated path; advanced tests assert stale-write rejection separately.
+
 ## Question and implementation
 
 How do concurrent acquisitions and writes affect cached values? A per-key gate serializes local
