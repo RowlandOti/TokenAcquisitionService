@@ -47,7 +47,9 @@ dotnet build TokenAcquisitionService.sln --no-restore
 dotnet test TokenAcquisitionService.sln --no-build --blame-hang-timeout 30s
 ```
 
-Final branch validation additionally uses Release builds/tests and `dotnet format --verify-no-changes`.
+Each branch was independently checked out, restored, built, and tested in Release: 47, 65, and
+101 passing tests respectively, with zero failures, skips, build warnings, or errors. The final
+branch also passed `dotnet format --verify-no-changes`; ancestry and clean-worktree checks passed.
 On macOS long-running invocations are prefixed with `caffeinate -dimsu`; in this workspace the executable
 is `.tools/dotnet/dotnet`. Tests use fake time/completion sources and require no network/credentials.
 An initial HybridCache comparison exposed its exact-type memory-cache L2 optimization; the final
@@ -86,10 +88,20 @@ outside the infrastructure-free scope. HybridCache is evaluated rather than ship
 token adapter. Uncooperative SDK code may prevent async disposal from draining, while retained permits
 keep physical concurrency bounded. Authority state needs durable monotonic retention in production.
 
-Private publication was authorized after the initial no-push instruction. GitHub CLI was missing
-and installed locally; browser authentication is required before repository creation/push. No
-public repository or unverified remote will be used. Actual publication status is reported separately
-after attempting authentication; local commits do not imply GitHub publication.
+**Blocked: private GitHub publication.** Publication was authorized after the initial no-push
+instruction, targeting `RowlandOti/TokenAcquisitionService`. GitHub CLI was missing and installed
+locally. A browser device-login flow was started, but authorization was not completed; the final
+`gh auth status` check reports no logged-in GitHub hosts. The pending login process was stopped.
+No remote was configured, no repository was created, and no code was pushed.
+
+To unblock authentication from this workspace:
+
+```sh
+.tools/gh_2.103.3_macOS_arm64/bin/gh auth login --hostname github.com --git-protocol https --web
+```
+
+After authentication, verify account ownership and private visibility before pushing the three
+feature branches. Do not silently use/create a public repository or push directly to `main`.
 
 ## H. Interview preparation
 
