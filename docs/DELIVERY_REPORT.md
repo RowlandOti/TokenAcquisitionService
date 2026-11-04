@@ -10,6 +10,16 @@
 
 Use `git log --oneline --all --graph` and `git rev-parse <branch>` for final branch-tip hashes.
 This document cannot embed its own final commit hash without changing that hash.
+All three branches are published in the verified **private** repository:
+https://github.com/RowlandOti/TokenAcquisitionService
+
+The default branch is `feature/03-distributed-coordination`. Draft comparison pull requests:
+
+- https://github.com/RowlandOti/TokenAcquisitionService/pull/1 — resilience over foundation.
+- https://github.com/RowlandOti/TokenAcquisitionService/pull/2 — coordination over resilience.
+
+Leave these comparison PRs unmerged to preserve the independent branch snapshots.
+Their review/discussion/inline-comment queues were checked after creation; all were empty.
 No existing repository content existed at initial inspection; no prior work was overwritten.
 Resilience work was temporarily stashed while expanded foundation requirements were added,
 then restored; no history was rewritten.
@@ -88,20 +98,16 @@ outside the infrastructure-free scope. HybridCache is evaluated rather than ship
 token adapter. Uncooperative SDK code may prevent async disposal from draining, while retained permits
 keep physical concurrency bounded. Authority state needs durable monotonic retention in production.
 
-**Blocked: private GitHub publication.** Publication was authorized after the initial no-push
-instruction, targeting `RowlandOti/TokenAcquisitionService`. GitHub CLI was missing and installed
-locally. A browser device-login flow was started, but authorization was not completed; the final
-`gh auth status` check reports no logged-in GitHub hosts. The pending login process was stopped.
-No remote was configured, no repository was created, and no code was pushed.
+**Private GitHub publication completed.** Publication was authorized after the initial no-push
+instruction. Browser authorization was unavailable, but the existing macOS Git credential helper
+successfully authenticated the authorized owner. Credentials were never printed or committed;
+GitHub API operations used the existing credential only through process-local authentication.
 
-To unblock authentication from this workspace:
-
-```sh
-.tools/gh_2.103.3_macOS_arm64/bin/gh auth login --hostname github.com --git-protocol https --web
-```
-
-After authentication, verify account ownership and private visibility before pushing the three
-feature branches. Do not silently use/create a public repository or push directly to `main`.
+The repository was created with private visibility, verified before any code upload, and verified
+private again after publishing all three branches. Remote branch commit IDs matched the local tips.
+No force push, direct push to `main`, history rewrite, or merge of the comparison branches occurred.
+GitHub CLI's saved browser-login state is not required for native Git's existing credential helper.
+No publishing blocker remains.
 
 ## H. Interview preparation
 

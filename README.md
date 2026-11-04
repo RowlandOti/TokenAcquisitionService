@@ -4,6 +4,11 @@ A .NET 10 class library for acquiring tokens through a black-box SDK, with bound
 L1 (`IMemoryCache`) and abstract L2 caching. No web host, identity provider, OAuth implementation,
 Redis, or credentials are required. The tests are runnable examples.
 
+Private repository: https://github.com/RowlandOti/TokenAcquisitionService.
+The default branch contains the final implementation; the three feature branches preserve the
+engineering progression. See [delivery report](docs/DELIVERY_REPORT.md) for validation and draft
+comparison pull requests.
+
 ## Run
 
 Install the supported .NET 10 SDK, then:
