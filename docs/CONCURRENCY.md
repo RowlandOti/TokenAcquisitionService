@@ -1,5 +1,11 @@
 # C. Concurrency
 
+**Branch 2 update:** the semaphore design below records Branch 1's progression. The current
+implementation uses reclaimed shared tasks and caller-only wait cancellation; see
+[production resilience](PRODUCTION_RESILIENCE.md). The single-key fill and independent-key
+invariants are unchanged. `Canceled_initiator_does_not_cancel_shared_acquisition` replaces the
+owner-cancellation/gate-retry test.
+
 ## Question and implementation
 
 How do simultaneous misses avoid duplicate SDK acquisitions? Branch 1 uses a `SemaphoreSlim`

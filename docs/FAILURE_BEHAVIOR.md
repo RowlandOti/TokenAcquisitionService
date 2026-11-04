@@ -1,5 +1,11 @@
 # E. Failure behavior
 
+**Branch 2 update:** storage fallback and cancellation exclusions remain. Shared failures now
+fan out to existing waiters, and initiating-caller cancellation only cancels its wait. Service
+shutdown/deadlines govern the acquisition. Timeouts, classified retries, circuit recovery, and
+draining are described in [production resilience](PRODUCTION_RESILIENCE.md); the remainder
+records the foundation behavior for comparison.
+
 ## Question and selected policy
 
 What happens when L2 or the SDK fails, and how does cancellation propagate?

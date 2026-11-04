@@ -67,3 +67,13 @@ cross-instance duplicate issuance and older-over-newer writes in deterministic t
 There is no exactly-once or issuer-revocation guarantee.
 
 Start with [architecture](docs/ARCHITECTURE.md) and the [interview guide](docs/INTERVIEW_GUIDE.md).
+
+## Current branch: production resilience
+
+Shared-task singleflight isolates caller cancellation. Service-owned timeouts/shutdown bound fills,
+admission limits bound pending keys, and SDK permits remain held until actual completion.
+L2 deadlines/circuit breaker and classified bounded SDK retries complement the same best-effort
+or strict cache policy. Use async disposal to cancel and drain cooperative adapters.
+See [production resilience](docs/PRODUCTION_RESILIENCE.md),
+[observability](docs/OBSERVABILITY.md), and the [requirements matrix](docs/REQUIREMENTS_MATRIX.md).
+These controls do not fix cross-instance last-writer-wins races.

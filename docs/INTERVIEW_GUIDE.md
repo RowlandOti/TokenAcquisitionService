@@ -2,7 +2,8 @@
 
 Branch 1 asks **Is my implementation correct?** Branch 2 asks **Does it remain reliable under
 load and failure?** Branch 3 asks **What guarantees can multiple coordinating instances provide?**
-Advanced questions below describe planned extensions, not capabilities claimed by Branch 1.
+Advanced questions below describe planned extensions when reading Branch 1. In Branch 2,
+resource/cancellation/resilience extensions are implemented; distributed ones remain planned.
 
 Locations abbreviate `src/TokenAcquisitionService/`; tests are in
 `tests/TokenAcquisitionService.Tests/FoundationTests.cs` unless otherwise noted.
@@ -67,6 +68,18 @@ Locations abbreviate `src/TokenAcquisitionService/`; tests are in
 | Why completion sources? | Explicit control over when a fake SDK continues; async continuations avoid running arbitrary caller code inline. | same-key and race tests | Sleeps do not establish causal ordering. | Forget to signal; how bound a test hang? |
 | Why `WaitAsync`? | Asynchronously cancel the wait, distinct from stopping the underlying task. | cancellation tests | Passing cancellation to underlying SDK has different ownership. | Wait abandoned; who observes later failure? |
 | Why `ConcurrentDictionary`? | Atomic per-key map operations; factories may execute multiple times, so only the selected object owns work. | thread-pool contention test | Global locking serializes unrelated keys. | Side effects in factories; what changes with lazy tasks? |
+
+### Branch 2 discussion updates
+
+| Decision / question | Strong answer and code | Test | Alternative / cost | Failure / follow-up |
+|---|---|---|---|---|
+| Reclaim gates safely? | Replace gates with identity-removed lazy flights in `TokenService.Flight`. | `Shared_flights_are_reclaimed_after_success_failure_and_cancellation` | Ref-counted gates need careful ownership. | Removal races; why compare flight identity? |
+| Who cancels shared work? | Service shutdown/deadline, never an individual waiter. | `Canceled_initiator_does_not_cancel_shared_acquisition` | Cancel when all waiters leave, with extra accounting. | Everybody leaves; why continue warming? |
+| Can timeouts exceed SDK limit? | Physical operation retains its permit until it really exits. | `Uncooperative_sdk_keeps_physical_concurrency_slot_after_timeout` | Releasing at timeout can overcommit. | SDK never exits; can async disposal finish? |
+| How bound key growth? | Admission bounds pending reservations; completed flights are removed. | `Sdk_concurrency_and_pending_key_capacity_are_bounded` | Unlimited queue improves admission but risks memory. | Capacity reached; what should caller retry? |
+| How observe safely? | Fixed structured event labels, no exception payloads/context. | `Structured_metrics_use_fixed_events_not_tokens_or_contexts` | Per-account tags explode cardinality and expose data. | SDK secret in exception; why omit payload? |
+| Half-open recovery? | One probe after time-based open interval in `L2Circuit`. | `Circuit_opens_skips_dependency_then_allows_one_recovery_probe` | Mature resilience library adds configurable policies. | Out-of-order completions; is health strongly ordered? |
+| Which failures retry? | Only adapter-classified `TransientTokenException`, bounded attempts. | `Classified_transient_sdk_failure_retries_but_permanent_failure_does_not` | Provider-specific classifier adds coupling. | Auth failure; what makes retry safe? |
 
 ### Next changes
 

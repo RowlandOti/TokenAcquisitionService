@@ -91,9 +91,10 @@ instances to model independent processes.
 
 ## Ownership and scope
 
-Branch 1 retains per-key semaphores for the service lifetime. Dispose only after draining callers.
-Branch 2 replaces this explicitly documented growth/shutdown limitation. SDK and cache adapters
-are owned by their DI container, not by the service.
+Branch 1 retains per-key semaphores for the service lifetime. Branch 2 replaces them with
+reclaimed lazy shared tasks, bounded SDK concurrency, and service-owned shutdown/deadlines.
+See [production resilience](PRODUCTION_RESILIENCE.md) for the current lifetime and failure model.
+SDK and cache adapters are owned by their DI container, not by the service.
 
 The five correctness decisions have dedicated documents:
 [identity](CACHE_IDENTITY.md), [expiration](EXPIRATION.md),

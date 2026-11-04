@@ -99,7 +99,7 @@ public sealed class FoundationTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => waiting);
         h.Sdk.Handler = (_, _) => Task.FromResult(h.Token());
         Assert.Equal("test-token", (await h.Service.AcquireAsync(Harness.Request())).AccessToken);
-        Assert.Equal(3, h.Sdk.Calls);
+        Assert.Equal(2, h.Sdk.Calls);
     }
 
     [Fact]
@@ -124,23 +124,23 @@ public sealed class FoundationTests
     }
 
     [Fact]
-    public async Task Canceled_owner_releases_gate_and_waiter_rechecks_external_population()
+    public async Task Canceled_initiator_does_not_cancel_shared_acquisition()
     {
         using var h = new Harness();
-        var never = Harness.Signal();
+        var release = Harness.Signal();
         h.Sdk.Handler = async (_, ct) =>
         {
-            await never.Task.WaitAsync(ct);
+            await release.Task.WaitAsync(ct);
             return h.Token();
         };
         using var cts = new CancellationTokenSource();
         var owner = h.Service.AcquireAsync(Harness.Request(), cts.Token);
         var waiting = h.Service.AcquireAsync(Harness.Request());
-        var key = Harness.Request().CacheKey;
-        await h.Store.SetAsync(key, new(key, h.Token("external"), h.Time.GetUtcNow().AddMinutes(5)), default);
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => owner);
-        Assert.Equal("external", (await waiting.WaitAsync(TimeSpan.FromSeconds(10))).AccessToken);
+        Assert.False(waiting.IsCompleted);
+        release.SetResult();
+        Assert.Equal("test-token", (await waiting.WaitAsync(TimeSpan.FromSeconds(10))).AccessToken);
         Assert.Equal(1, h.Sdk.Calls);
     }
 
@@ -206,7 +206,11 @@ public sealed class FoundationTests
     [Fact]
     public async Task Token_expiring_during_L2_read_is_not_returned()
     {
-        using var h = new Harness();
+        using var h = new Harness(resilience: new()
+        {
+            AcquisitionTimeout = TimeSpan.FromMinutes(10),
+            L2Timeout = TimeSpan.FromMinutes(5)
+        });
         var token = h.Token("old", 2);
         h.Cache.Read = (key, _) =>
         {
@@ -220,7 +224,11 @@ public sealed class FoundationTests
     [Fact]
     public async Task Token_expiring_during_write_is_not_returned_or_promoted()
     {
-        using var h = new Harness();
+        using var h = new Harness(resilience: new()
+        {
+            AcquisitionTimeout = TimeSpan.FromMinutes(10),
+            L2Timeout = TimeSpan.FromMinutes(5)
+        });
         h.Sdk.Handler = (_, _) => Task.FromResult(h.Token(minutes: 2));
         h.Cache.Write = (_, _, _) =>
         {

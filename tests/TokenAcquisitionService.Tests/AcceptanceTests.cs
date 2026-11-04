@@ -97,7 +97,7 @@ public sealed class AcceptanceTests
     [Fact]
     public async Task Sdk_result_expiring_during_acquisition_is_rejected()
     {
-        using var h = new Harness();
+        using var h = new Harness(resilience: new() { AcquisitionTimeout = TimeSpan.FromMinutes(10) });
         var issued = h.Token(minutes: 2);
         var release = Harness.Signal();
         h.Sdk.Handler = async (_, ct) =>
