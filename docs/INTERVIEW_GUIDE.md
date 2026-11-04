@@ -46,6 +46,30 @@ Locations abbreviate `src/TokenAcquisitionService/`; tests are in
 
 ## What I Would Change Next
 
+## What I would explain in a 30-minute code review.
+
+| Minutes | Walkthrough | Demonstration |
+|---|---|---|
+| 0-5 | SDK boundary, immutable request, conservative canonical identity | `Contracts.cs`, identity theory |
+| 5-10 | Cache-aside, absolute expiration, two-minute safety worked example | `TokenService.cs`, `AcceptanceTests.Worked_1040_expiry_example_caps_promoted_L1` |
+| 10-15 | Local singleflight, double-checking, independent keys | 100 same/different-key and thread-pool tests |
+| 15-20 | Cancellation, SDK errors, L2 fallback and strict mode | Cancellation and outage tests |
+| 20-25 | Two instances, older-write-wins, restart, trust boundary | Deterministic race and restart tests |
+| 25-30 | Why branch 2/3 complexity is conditional on requirements | Resource lifecycle vs distributed ordering trade-offs |
+
+### Async foundations for follow-up
+
+| Question | Strong answer / code | Test | Alternative / trade-off | Failure / follow-up |
+|---|---|---|---|---|
+| What does `Task<TokenResult>` represent? | A future completion, not a dedicated thread; `ITokenSdk.AcquireAsync`. | SDK failure test | Synchronous SDK blocks capacity. | A fault is stored in the task; when observed? |
+| What does `await` schedule? | Suspends only if incomplete, resumes by continuation; library awaits use `ConfigureAwait(false)`. | `Actual_thread_pool_contention_preserves_singleflight` | `Task.Run` is for scheduling CPU/blocking work, not required for async I/O. | Captured context deadlock; why no `.Result`? |
+| Why `Task.WhenAll`? | Wait for all independent operations without serial awaiting startup. | 100 different-key test | Sequential acquisition hides concurrency defects. | Multiple faults; what does await throw? |
+| Why completion sources? | Explicit control over when a fake SDK continues; async continuations avoid running arbitrary caller code inline. | same-key and race tests | Sleeps do not establish causal ordering. | Forget to signal; how bound a test hang? |
+| Why `WaitAsync`? | Asynchronously cancel the wait, distinct from stopping the underlying task. | cancellation tests | Passing cancellation to underlying SDK has different ownership. | Wait abandoned; who observes later failure? |
+| Why `ConcurrentDictionary`? | Atomic per-key map operations; factories may execute multiple times, so only the selected object owns work. | thread-pool contention test | Global locking serializes unrelated keys. | Side effects in factories; what changes with lazy tasks? |
+
+### Next changes
+
 This heading interprets the truncated heading in the supplied task; it is not an extra product
 requirement. Start with safe flight reclamation and shutdown, deadlines, bounded issuer concurrency,
 and useful non-sensitive telemetry. Then add optional distributed fencing/version mechanisms only

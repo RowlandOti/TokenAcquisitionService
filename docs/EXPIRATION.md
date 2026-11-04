@@ -35,6 +35,26 @@ wall-clock eviction, which cannot make an expired logical entry usable.
 Alternatives include refresh-ahead/jitter or SDK-managed cache expiration. Serving expired
 tokens as stale-on-error is deliberately prohibited.
 
+## Worked example (also an executable theory)
+
+SDK expiry is 10:40, safety buffer two minutes, L1 maximum five minutes, L2 maximum sixty
+minutes. The absolute last usable cutoff is 10:38 (exclusive), so initial L2 residence is
+38 minutes, never sixty.
+
+| Time | Remaining token life | Remaining usable life | Maximum new L1 TTL |
+|---|---:|---:|---:|
+| 10:00 | 40 min | 38 min | 5 min |
+| 10:06 | 34 min | 32 min | 5 min |
+| 10:20 | 20 min | 18 min | 5 min |
+| 10:34 | 6 min | 4 min | 4 min |
+| 10:37 | 3 min | 1 min | 1 min |
+| 10:38 | 2 min | 0 min | 0 min |
+| 10:40 | 0 min | 0 min (clamped) | 0 min |
+
+`AcceptanceTests.Worked_1040_expiry_example_caps_promoted_L1` checks all seven points,
+the initial L2 cutoff, and L1's last fresh tick/first expired tick. Fake time advances directly;
+no wall-clock sleep determines correctness.
+
 ## Corresponding tests and limits
 
 `Safety_boundary_is_strict`, `Empty_sdk_token_is_rejected_without_caching`,
