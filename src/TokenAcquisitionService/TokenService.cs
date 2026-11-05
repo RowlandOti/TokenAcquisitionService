@@ -47,6 +47,7 @@ public sealed class TokenService : ITokenService, IDisposable
             }
             catch (Exception exception) when (exception is not OperationCanceledException && _options.BestEffortL2)
             {
+                // Best effort allows SDK fallback when L2 fails; cancellation and strict-mode failures propagate.
                 _logger.LogWarning("L2 read failed; falling back to SDK.");
             }
             cancellationToken.ThrowIfCancellationRequested();
@@ -63,6 +64,8 @@ public sealed class TokenService : ITokenService, IDisposable
             }
             catch (Exception exception) when (exception is not OperationCanceledException && _options.BestEffortL2)
             {
+                // Best effort still permits L1 caching and a fresh SDK result if L2 persistence fails.
+                // Cancellation and strict-mode failures propagate instead.
                 _logger.LogWarning("L2 write failed; returning SDK result without distributed caching.");
             }
             cancellationToken.ThrowIfCancellationRequested();
