@@ -2,9 +2,6 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace TokenAcquisitionService;
 
-public sealed class DistributedDependencyException(Exception innerException)
-    : Exception("A distributed coordination dependency is unavailable.", innerException);
-
 internal sealed class DistributedPolicy : IDisposable
 {
     private readonly DistributedConfiguration _configuration;
