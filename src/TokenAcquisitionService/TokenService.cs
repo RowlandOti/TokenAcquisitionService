@@ -31,10 +31,14 @@ public sealed class TokenService : ITokenService, IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         var key = request.CacheKey;
         if (ReadLocal(key) is { } local) return local;
+        // Example: 100 same-key callers miss L1; GetOrAdd gives all callers the same stored gate.
         var gate = _gates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        // One caller enters; the other 99 await a permit without blocking thread-pool threads.
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // After the first caller fills L1, waiters enter and reuse it instead of calling the SDK.
+            // The gate alone only serializes calls; this recheck prevents duplicate successful fills.
             if (ReadLocal(key) is { } cached) return cached;
             CacheEnvelope? remote = null;
             try
@@ -68,6 +72,7 @@ public sealed class TokenService : ITokenService, IDisposable
         }
         finally
         {
+            // Release on success, failure, or cancellation so the next waiter can recheck caches.
             gate.Release();
         }
     }
@@ -94,6 +99,8 @@ public sealed class TokenService : ITokenService, IDisposable
     private DateTimeOffset Until(TokenResult token, TimeSpan maximumTtl) =>
         Min(token.ExpiresAt - _options.SafetyBuffer, _time.GetUtcNow() + maximumTtl);
 
+    // Example: At 10:34, L1's five-minute cap allows caching until 10:39. If L2's
+    // CacheUntil is 10:38, Min caps L1 at 10:38: a four-minute TTL, unless token freshness requires less.
     private void WriteLocal(string key, TokenResult token, DateTimeOffset remoteUntil)
     {
         var until = Min(Until(token, _options.L1MaximumTtl), remoteUntil);
