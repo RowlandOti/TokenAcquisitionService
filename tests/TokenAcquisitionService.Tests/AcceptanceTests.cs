@@ -186,7 +186,7 @@ public sealed class AcceptanceTests
         // Arrange: Restore a successful SDK response.
         h.Sdk.Handler = (_, _) => Task.FromResult(h.Token());
 
-        // Act & Assert: A later request completes without a stranded gate.
+        // Act & Assert: A later request completes because failed shared flights do not remain cached.
         await h.Service.AcquireAsync(Harness.Request());
     }
 

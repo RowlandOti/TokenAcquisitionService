@@ -121,20 +121,20 @@ public sealed class FoundationTests
             throw new InvalidOperationException("issuer failed");
         };
 
-        // Act: Start the owner and waiter, then trigger SDK failure.
+        // Act: Start two callers sharing one fill, then trigger SDK failure.
         var first = h.Service.AcquireAsync(Harness.Request());
         await entered.Task;
         var waiting = h.Service.AcquireAsync(Harness.Request());
         fail.SetResult();
 
-        // Assert: Both callers observe the original failure rather than a cached success.
+        // Assert: Both callers observe the shared failure rather than retrying or receiving a cached success.
         await Assert.ThrowsAsync<InvalidOperationException>(() => first);
         await Assert.ThrowsAsync<InvalidOperationException>(() => waiting);
 
         // Arrange: Restore a healthy SDK response.
         h.Sdk.Handler = (_, _) => Task.FromResult(h.Token());
 
-        // Act & Assert: A later request succeeds, proving failures did not poison the gate or caches.
+        // Act & Assert: A later request starts a fresh fill, proving the failed flight and caches were not poisoned.
         Assert.Equal("test-token", (await h.Service.AcquireAsync(Harness.Request())).AccessToken);
         Assert.Equal(2, h.Sdk.Calls);
     }
@@ -142,7 +142,7 @@ public sealed class FoundationTests
     [Fact]
     public async Task Cancellation_while_waiting_does_not_cancel_owner_or_block_later_callers()
     {
-        // Arrange: Hold the owner's SDK response so another caller must wait.
+        // Arrange: Hold the shared SDK response so both callers remain waiting.
         using var h = new Harness();
         var release = Harness.Signal();
         h.Sdk.Handler = async (_, ct) =>
@@ -160,12 +160,12 @@ public sealed class FoundationTests
         // Assert: The canceled waiter exits without canceling the shared acquisition.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
 
-        // Act: Release the owner and make a later request.
+        // Act: Complete the shared response, await the initiating caller, and make a later request.
         release.SetResult();
         await owner;
         await h.Service.AcquireAsync(Harness.Request());
 
-        // Assert: The owner stayed active and its cache fill serves the later request.
+        // Assert: Waiter cancellation did not stop the shared fill, which serves the later request.
         Assert.Equal(1, h.Sdk.Calls);
     }
 
@@ -441,7 +441,7 @@ public sealed class FoundationTests
         // Act: Let the older response complete after the newer write.
         releaseFirst.SetResult();
 
-        // Assert: Local gates allow duplicate issuance and an older L2 overwrite without extending validity.
+        // Assert: Independent local flights allow duplicate issuance and an older L2 overwrite without extending validity.
         Assert.Equal(older, await lateWriter);
         Assert.Equal(2, h.Sdk.Calls);
         var entry = await h.Store.GetAsync(Harness.Request().CacheKey, default);
