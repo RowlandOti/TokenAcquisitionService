@@ -52,8 +52,9 @@ Build a local NuGet package (no publishing is performed):
 dotnet pack src/TokenAcquisitionService/TokenAcquisitionService.csproj -c Release
 ```
 
-The package includes the library, XML documentation, and this README, but not the local-only
-`docs/*.md` files. Keep one package until independent consumers or adapter dependencies justify
+The package includes the library, XML documentation, and this README. Detailed documentation
+under `docs/` is tracked in Git but is not bundled in the NuGet package.
+Keep one package until independent consumers or adapter dependencies justify
 separate packages; folders alone do not justify additional assemblies.
 
 ## Integration
@@ -140,5 +141,5 @@ Shared-task singleflight isolates caller cancellation. Service-owned timeouts/sh
 admission limits bound pending keys, and SDK permits remain held until actual completion.
 L2 deadlines/circuit breaker and classified bounded SDK retries complement the same best-effort
 or strict cache policy. Use async disposal to cancel and drain cooperative adapters.
-Detailed walkthroughs under `docs/` are local-only and are not included in clones or packages.
+Detailed walkthroughs under `docs/` are included in Git clones, but not NuGet packages.
 These controls do not fix cross-instance last-writer-wins races.
