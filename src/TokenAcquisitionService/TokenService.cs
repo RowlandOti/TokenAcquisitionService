@@ -224,9 +224,10 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
 
     private bool IsUsable(CacheEnvelope? entry, string key)
     {
-        var usable = entry is not null && entry.CacheKey == key && entry.CacheUntil > _time.GetUtcNow()
+        var now = _time.GetUtcNow();
+        var usable = entry is not null && entry.CacheKey == key && entry.CacheUntil > now
         && !string.IsNullOrWhiteSpace(entry.Token.AccessToken)
-        && entry.Token.ExpiresAt - _time.GetUtcNow() > _options.SafetyBuffer;
+        && entry.Token.ExpiresAt - now > _options.SafetyBuffer;
         if (entry is not null && !usable) _telemetry.Record("freshness_rejection");
         return usable;
     }
@@ -248,8 +249,11 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     // CacheUntil is 10:38, Min caps L1 at 10:38: a four-minute TTL, unless token freshness requires less.
     private void WriteLocal(string key, TokenResult token, DateTimeOffset remoteUntil)
     {
-        var until = Min(Until(token, _options.L1MaximumTtl), remoteUntil);
-        var ttl = until - _time.GetUtcNow();
+        // One sample keeps the logical deadline and its relative TTL consistent.
+        var now = _time.GetUtcNow();
+        var until = Min(Min(token.ExpiresAt - _options.SafetyBuffer,
+            now + _options.L1MaximumTtl), remoteUntil);
+        var ttl = until - now;
         if (ttl > TimeSpan.Zero)
             _l1.Set(key, new CacheEnvelope(key, token, until),
                 new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl, Size = 1 });

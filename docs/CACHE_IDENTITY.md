@@ -24,6 +24,9 @@ collisions; null principal is distinct from any account. Every cache read verifi
 
 Alice requests K(A) -> storage mistakenly returns envelope K(B) -> reject -> SDK for Alice.
 The mismatch does not promote Bob's token into Alice's L1.
+The simulated L2 setter also rejects mismatched storage/envelope keys before mutation.
+The wrong-user test injects a faulty read response to verify service-side defense independently.
+Neither check authenticates maliciously relabeled opaque tokens.
 
 ## Trade-offs, alternatives, and limits
 
