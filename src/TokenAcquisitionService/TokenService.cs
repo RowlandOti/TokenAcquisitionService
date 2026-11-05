@@ -30,7 +30,7 @@ public sealed class TokenService : ITokenService, IDisposable
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         var key = request.CacheKey;
-        if (ReadLocal(key) is { } local) return local;
+        if (ReadLocal(key) is { } local) return Validate(local);
         // Example: 100 same-key callers miss L1; GetOrAdd gives all callers the same stored gate.
         var gate = _gates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         // One caller enters; the other 99 await a permit without blocking thread-pool threads.
@@ -39,7 +39,7 @@ public sealed class TokenService : ITokenService, IDisposable
         {
             // After the first caller fills L1, waiters enter and reuse it instead of calling the SDK.
             // The gate alone only serializes calls; this recheck prevents duplicate successful fills.
-            if (ReadLocal(key) is { } cached) return cached;
+            if (ReadLocal(key) is { } cached) return Validate(cached);
             CacheEnvelope? remote = null;
             try
             {
@@ -87,10 +87,13 @@ public sealed class TokenService : ITokenService, IDisposable
         return null;
     }
 
-    private bool IsUsable(CacheEnvelope? entry, string key) =>
-        entry is not null && entry.CacheKey == key && entry.CacheUntil > _time.GetUtcNow()
-        && !string.IsNullOrWhiteSpace(entry.Token.AccessToken)
-        && entry.Token.ExpiresAt - _time.GetUtcNow() > _options.SafetyBuffer;
+    private bool IsUsable(CacheEnvelope? entry, string key)
+    {
+        var now = _time.GetUtcNow();
+        return entry is not null && entry.CacheKey == key && entry.CacheUntil > now
+            && !string.IsNullOrWhiteSpace(entry.Token.AccessToken)
+            && entry.Token.ExpiresAt - now > _options.SafetyBuffer;
+    }
 
     private TokenResult Validate(TokenResult token)
     {
@@ -106,8 +109,11 @@ public sealed class TokenService : ITokenService, IDisposable
     // CacheUntil is 10:38, Min caps L1 at 10:38: a four-minute TTL, unless token freshness requires less.
     private void WriteLocal(string key, TokenResult token, DateTimeOffset remoteUntil)
     {
-        var until = Min(Until(token, _options.L1MaximumTtl), remoteUntil);
-        var ttl = until - _time.GetUtcNow();
+        // One sample keeps the logical deadline and its relative TTL consistent.
+        var now = _time.GetUtcNow();
+        var until = Min(Min(token.ExpiresAt - _options.SafetyBuffer,
+            now + _options.L1MaximumTtl), remoteUntil);
+        var ttl = until - now;
         if (ttl > TimeSpan.Zero)
             _l1.Set(key, new CacheEnvelope(key, token, until),
                 new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl, Size = 1 });

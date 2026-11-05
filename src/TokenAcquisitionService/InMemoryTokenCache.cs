@@ -18,6 +18,10 @@ public sealed class InMemoryTokenCache(TimeProvider timeProvider) : ITokenCache
     public Task SetAsync(string key, CacheEnvelope envelope, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (!StringComparer.Ordinal.Equals(key, envelope.CacheKey))
+            throw new ArgumentException("The envelope cache key must match the storage key.", nameof(envelope));
         _entries[key] = envelope;
         return Task.CompletedTask;
     }

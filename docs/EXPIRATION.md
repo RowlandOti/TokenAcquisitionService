@@ -63,6 +63,11 @@ no wall-clock sleep determines correctness.
 `L1_and_L2_ttls_are_capped_and_promotion_does_not_reset_L2_lifetime`,
 `Near_expiry_L2_promotion_recalculates_usable_lifetime`.
 
-Guarantee: fresh according to the supplied clock immediately before return. No guarantee:
+Each synchronous envelope check and L1 deadline/TTL calculation uses one clock sample.
+New samples are still taken after asynchronous I/O and at final token validation, including L1 hits.
+`CacheBoundaryTests.L1_token_crossing_safety_boundary_before_final_validation_is_rejected`
+verifies a token crossing the cutoff between lookup and final validation.
+
+Guarantee: fresh according to the supplied clock at the final validation sample. No guarantee:
 valid at later downstream use, issuer revocation, unbounded clock jumps, or unsynchronized hosts.
 No software can keep a returned token fresh forever; callers should use it promptly.

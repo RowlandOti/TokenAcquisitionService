@@ -50,7 +50,7 @@ The service owns L1 and gates, not the SDK, L2, logger, or clock.
   envelope detects a wrongly routed entry, not malicious substitution of both token and metadata.
   Tokens are opaque: this library cannot verify issuer claims or revocation.
 - Clock synchronization and a safety buffer are required across hosts. Freshness is checked
-  immediately before returning; a token can expire in transit or after return.
+  at the final validation sample; a token can expire before caller observation or later use.
 - The SDK must cooperate with cancellation. Credentials, token persistence protection, eviction,
   and production distributed infrastructure are deliberately outside this exercise.
 
