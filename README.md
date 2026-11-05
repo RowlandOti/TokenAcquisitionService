@@ -4,6 +4,11 @@ A .NET 10 class library for acquiring tokens through a black-box SDK, with bound
 L1 (`IMemoryCache`) and abstract L2 caching. No web host, identity provider, OAuth implementation,
 Redis, or credentials are required. The tests are runnable examples.
 
+Private repository: https://github.com/RowlandOti/TokenAcquisitionService.
+The default branch contains the final implementation; the three feature branches preserve the
+engineering progression. See [delivery report](docs/DELIVERY_REPORT.md) for validation and draft
+comparison pull requests.
+
 ## Run
 
 Install the supported .NET 10 SDK, then:
@@ -25,6 +30,7 @@ The solution ships one library, not a separate assembly for each folder:
 ```text
 src/TokenAcquisitionService/
   Abstractions/          SDK, service, and cache interfaces
+    Distributed/         Version, lease, conditional-cache, and notification interfaces
   Models/                Immutable acquisition request and result
   Caching/               Cache envelope and in-memory L2 simulation
   Options/               Cache configuration and validation
@@ -32,11 +38,16 @@ src/TokenAcquisitionService/
   DependencyInjection/   Service registration
   Resilience/            L2 deadlines and circuit breaker
   Diagnostics/           Metrics and fixed-payload logging
+  Distributed/           Coordination policy, configuration, and in-memory simulations
+    Models/              Lease grant and invalidation message
   TokenService.cs        Acquisition orchestration and lifecycle
 tests/TokenAcquisitionService.Tests/
   Foundation/            Acceptance, foundation, and cache-boundary tests
   Resilience/            Lifecycle, deadlines, cancellation, and operational tests
+  Distributed/           Coordination, invalidation, and distributed observability tests
+  Comparisons/           HybridCache behavior comparisons
   Support/               Shared harness and one test double per file
+    Distributed/         Distributed harness, fault adapter, and switchable bus
 ```
 
 Each top-level production type has its own file. Folders organize responsibilities while
@@ -134,7 +145,7 @@ Branches 02 and 03 explore these extensions rather than changing Branch 01's fou
 Each later branch is based on the completed preceding branch. Branch 1 intentionally exposes
 cross-instance duplicate issuance and older-over-newer writes in deterministic tests.
 There is no exactly-once or issuer-revocation guarantee.
-## Current branch: production resilience
+## Production resilience (preserved in Branch 3)
 
 Shared-task singleflight isolates caller cancellation. Service-owned timeouts/shutdown bound fills,
 admission limits bound pending keys, and SDK permits remain held until actual completion.
@@ -142,3 +153,16 @@ L2 deadlines/circuit breaker and classified bounded SDK retries complement the s
 or strict cache policy. Use async disposal to cancel and drain cooperative adapters.
 Detailed walkthroughs under `docs/` are local-only and are not included in clones or packages.
 These controls do not fix cross-instance last-writer-wins races.
+
+## Optional distributed coordination (Branch 3)
+
+Pass `DistributedConfiguration` to opt into atomic generation/fence writes, optional leader
+leases, optional version-validated reads/local version leases, and optional lossy invalidation
+notifications. The ordinary path does not perform distributed version lookups.
+See [integration example and protocol](docs/DISTRIBUTED_COORDINATION.md),
+[consistency guarantees](docs/CONSISTENCY_MODEL.md), [version policies](docs/VERSION_STAMPS.md),
+and [HybridCache evidence](docs/HYBRID_CACHE_COMPARISON.md).
+
+The in-memory distributed store/bus are explicitly demonstration adapters. No Redis, issuer,
+Docker, web application, or real credentials are needed to run tests. Production adapters must
+implement the same atomic authority operations and protect stored tokens.
