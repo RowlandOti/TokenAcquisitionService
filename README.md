@@ -54,6 +54,37 @@ The service owns L1 and gates, not the SDK, L2, logger, or clock.
 - The SDK must cooperate with cancellation. Credentials, token persistence protection, eviction,
   and production distributed infrastructure are deliberately outside this exercise.
 
+## Design decisions and trade-offs (Branch 01)
+
+| Decision | Why | Trade-off |
+|---|---|---|
+| Cache-aside | The SDK remains the authoritative token issuer; the service checks caches, acquires on a miss, and explicitly populates L2 then L1. | Acquisition and cache writes are not atomic. Cache writes do not issue tokens, so write-through/write-back do not fit this boundary; write-around would sacrifice reuse. |
+| L1 plus shared L2 | L1 avoids network calls; L2 allows reuse across service instances. | Two cache layers require coordinated expiration, and L1 can temporarily differ between instances. |
+| Immutable context and canonical SHA-256 keys | Snapshot every identity-affecting input, normalize scope order/duplicates, and avoid exposing raw context in keys. | Isolation depends on complete inputs and correct canonicalization. Hashing is not encryption or proof that a cached token is authentic. |
+| Safety buffer and bounded TTLs | Reject nearly expired tokens; cap L2 residence and cap L1 against both its own maximum and L2's `CacheUntil`. | Earlier refreshes increase SDK calls. Freshness holds at the final validation sample, not throughout subsequent caller use. |
+| Per-key asynchronous gates with a cache recheck | Same-key callers serialize without blocking thread-pool threads; waiters reuse a successful fill while unrelated keys proceed independently. | Gates remain allocated until disposal. Failures are not shared results, so later waiters can attempt acquisition again. Coordination is local to one service instance. |
+| Best-effort L2 by default, with strict mode available | A shared-cache failure need not prevent returning a valid SDK-issued token; failures are logged, while cancellation propagates. | An outage reduces shared reuse and can increase SDK load. Strict mode instead propagates L2 failures. |
+| Deterministic fake SDK, cache, and clock | Reproduce expiration boundaries, contention, and distributed races without sleep-based timing. | Unit tests demonstrate the library contract, not real adapter serialization, network behavior, or production infrastructure. |
+
+## Possible improvements and interview extensions
+
+These are not implemented in Branch 01:
+
+1. **Coordinated disposal during active operations:** stop accepting requests, signal shutdown
+   cancellation, and drain admitted operations before disposing L1 and semaphores. Add asynchronous
+   disposal so callers can await cleanup. This prevents resource-use/release races; draining can
+   still wait indefinitely if an SDK or cache dependency ignores cancellation.
+2. **Operational resilience:** add acquisition/L2 deadlines, bounded pending work and physical SDK
+   concurrency, classified retries with backoff, circuit breaking, and metrics. These controls
+   bound load and improve failure visibility, but add configuration and state-machine complexity.
+   A deadline cannot forcibly stop an uncooperative SDK.
+3. **Cross-instance coordination:** add per-key distributed leases, atomic fenced writes, and
+   generation/version checks for invalidation. These reduce duplicate issuance and reject stale
+   publication, but require shared-store atomicity and an explicit coordination-failure policy.
+   Lease expiry still permits duplicate SDK calls; exactly-once issuance requires issuer-side support.
+
+Branches 02 and 03 explore these extensions rather than changing Branch 01's foundation contract.
+
 ## Branch progression
 
 | Branch | Engineering question | Consistency |
