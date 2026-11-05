@@ -65,5 +65,3 @@ The service owns L1 and gates, not the SDK, L2, logger, or clock.
 Each later branch is based on the completed preceding branch. Branch 1 intentionally exposes
 cross-instance duplicate issuance and older-over-newer writes in deterministic tests.
 There is no exactly-once or issuer-revocation guarantee.
-
-Start with [architecture](docs/ARCHITECTURE.md) and the [interview guide](docs/INTERVIEW_GUIDE.md).
