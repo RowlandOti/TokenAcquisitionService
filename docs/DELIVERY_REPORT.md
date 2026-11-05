@@ -45,9 +45,9 @@ Development tools live only in ignored `.tools/`.
 
 | Branch | Test cases | Failed / skipped |
 |---|---:|---|
-| Foundation | 47 | 0 / 0 |
-| Resilience | 65 | 0 / 0 |
-| Coordination | 101 | 0 / 0 |
+| Foundation | 51 | 0 / 0 |
+| Resilience | 69 | 0 / 0 |
+| Coordination | 105 | 0 / 0 |
 
 Commands used for each acceptance gate:
 
@@ -57,8 +57,10 @@ dotnet build TokenAcquisitionService.sln --no-restore
 dotnet test TokenAcquisitionService.sln --no-build --blame-hang-timeout 30s
 ```
 
-Each branch was independently checked out, restored, built, and tested in Release: 47, 65, and
-101 passing tests respectively, with zero failures, skips, build warnings, or errors. The final
+Initial delivery independently verified Release suites of 47, 65, and 101 tests. The approved
+cache-boundary follow-up adds four regression cases on each branch: matching/mismatched writes,
+cancellation precedence, and final L1-hit freshness validation, resulting in 51, 69, and 105 tests.
+The follow-up preserves branch-specific synchronization and distributed metadata handling. The final
 branch also passed `dotnet format --verify-no-changes`; ancestry and clean-worktree checks passed.
 On macOS long-running invocations are prefixed with `caffeinate -dimsu`; in this workspace the executable
 is `.tools/dotnet/dotnet`. Tests use fake time/completion sources and require no network/credentials.
