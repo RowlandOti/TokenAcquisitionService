@@ -49,8 +49,9 @@ Build a local NuGet package (no publishing is performed):
 dotnet pack src/TokenAcquisitionService/TokenAcquisitionService.csproj -c Release
 ```
 
-The package includes the library, XML documentation, and this README, but not the local-only
-`docs/*.md` files. Keep one package until independent consumers or adapter dependencies justify
+The package includes the library, XML documentation, and this README. Detailed documentation
+under `docs/` is tracked in Git but is not bundled in the NuGet package.
+Keep one package until independent consumers or adapter dependencies justify
 separate packages; folders alone do not justify additional assemblies.
 
 ## Integration
