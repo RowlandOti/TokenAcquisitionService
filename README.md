@@ -18,6 +18,37 @@ On macOS prefix long-running commands with `caffeinate -dimsu`. In the developme
 the SDK is installed at `.tools/dotnet/dotnet` (ignored by Git); substitute that path for `dotnet`
 if the machine's global SDK is older.
 
+## Source layout and packaging
+
+The solution ships one library, not a separate assembly for each folder:
+
+```text
+src/TokenAcquisitionService/
+  Abstractions/          SDK, service, and cache interfaces
+  Models/                Immutable acquisition request and result
+  Caching/               Cache envelope and in-memory L2 simulation
+  Options/               Cache configuration and validation
+  Exceptions/            Public exception types
+  DependencyInjection/   Service registration
+  TokenService.cs        Acquisition orchestration and lifecycle
+tests/TokenAcquisitionService.Tests/
+```
+
+Each top-level production type has its own file. Folders organize responsibilities while
+public types retain the `TokenAcquisitionService` namespace for source/binary compatibility.
+Later branches add resilience, diagnostics, and distributed-coordination implementation folders.
+Closely coupled private nested implementation types may stay with their owning class.
+
+Build a local NuGet package (no publishing is performed):
+
+```sh
+dotnet pack src/TokenAcquisitionService/TokenAcquisitionService.csproj -c Release
+```
+
+The package includes the library, XML documentation, and this README, but not the local-only
+`docs/*.md` files. Keep one package until independent consumers or adapter dependencies justify
+separate packages; folders alone do not justify additional assemblies.
+
 ## Integration
 
 ```csharp
