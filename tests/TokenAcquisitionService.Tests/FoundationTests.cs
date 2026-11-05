@@ -384,12 +384,12 @@ public sealed class FoundationTests
     [Fact]
     public async Task Another_users_envelope_is_rejected_even_under_the_requested_key()
     {
-        // Arrange: Store Bob's envelope under Alice's lookup key to simulate a routing mistake.
+        // Arrange: Return Bob's envelope for Alice's lookup to simulate a faulty cache read adapter.
         using var h = new Harness();
         var alice = Harness.Request();
         var bob = Harness.Request(principal: "bob");
-        await h.Store.SetAsync(alice.CacheKey,
-            new(bob.CacheKey, h.Token("bob-token"), h.Time.GetUtcNow().AddMinutes(10)), default);
+        h.Cache.Read = (_, _) => Task.FromResult<CacheEnvelope?>(
+            new(bob.CacheKey, h.Token("bob-token"), h.Time.GetUtcNow().AddMinutes(10)));
 
         // Act & Assert: Alice receives an SDK result rather than Bob's mismatched cached token.
         Assert.Equal("test-token", (await h.Service.AcquireAsync(alice)).AccessToken);

@@ -328,8 +328,10 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     // CacheUntil is 10:38, Min caps L1 at 10:38: a four-minute TTL, unless token freshness requires less.
     private void WriteLocal(string key, TokenResult token, DateTimeOffset remoteUntil, long generation = 0, long fence = 0)
     {
-        var until = TokenExpirationPolicy.Min(Until(token, _options.L1MaximumTtl), remoteUntil);
-        var ttl = until - _time.GetUtcNow();
+        // One sample keeps the logical deadline and its relative TTL consistent.
+        var now = _time.GetUtcNow();
+        var until = TokenExpirationPolicy.Min(_expiration.Until(token, _options.L1MaximumTtl, now), remoteUntil);
+        var ttl = until - now;
         if (ttl <= TimeSpan.Zero) return;
         // Fixed stripes only cover an in-memory compare/set, never I/O or acquisition.
         // Different generation flights may overlap; a delayed old fill must not replace a newer L1.
