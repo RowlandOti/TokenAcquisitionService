@@ -42,12 +42,20 @@ src/TokenAcquisitionService/
     Models/              Lease grant and invalidation message
   TokenService.cs        Acquisition orchestration and lifecycle
 tests/TokenAcquisitionService.Tests/
+  Foundation/            Acceptance, foundation, and cache-boundary tests
+  Resilience/            Lifecycle, deadlines, cancellation, and operational tests
+  Distributed/           Coordination, invalidation, and distributed observability tests
+  Comparisons/           HybridCache behavior comparisons
+  Support/               Shared harness and one test double per file
+    Distributed/         Distributed harness, fault adapter, and switchable bus
 ```
 
 Each top-level production type has its own file. Folders organize responsibilities while
 public types retain the `TokenAcquisitionService` namespace for source/binary compatibility.
 Later branches add resilience, diagnostics, and distributed-coordination implementation folders.
 Closely coupled private nested implementation types may stay with their owning class.
+Tests remain in one project and keep existing namespaces and AAA explanations; later branches
+add `Resilience/`, `Distributed/`, `Comparisons/`, and `Support/Distributed/` folders.
 
 Build a local NuGet package (no publishing is performed):
 
