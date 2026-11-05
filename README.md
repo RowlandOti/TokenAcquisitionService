@@ -18,6 +18,39 @@ On macOS prefix long-running commands with `caffeinate -dimsu`. In the developme
 the SDK is installed at `.tools/dotnet/dotnet` (ignored by Git); substitute that path for `dotnet`
 if the machine's global SDK is older.
 
+## Source layout and packaging
+
+The solution ships one library, not a separate assembly for each folder:
+
+```text
+src/TokenAcquisitionService/
+  Abstractions/          SDK, service, and cache interfaces
+  Models/                Immutable acquisition request and result
+  Caching/               Cache envelope and in-memory L2 simulation
+  Options/               Cache configuration and validation
+  Exceptions/            Public exception types
+  DependencyInjection/   Service registration
+  Resilience/            L2 deadlines and circuit breaker
+  Diagnostics/           Metrics and fixed-payload logging
+  TokenService.cs        Acquisition orchestration and lifecycle
+tests/TokenAcquisitionService.Tests/
+```
+
+Each top-level production type has its own file. Folders organize responsibilities while
+public types retain the `TokenAcquisitionService` namespace for source/binary compatibility.
+Later branches add resilience, diagnostics, and distributed-coordination implementation folders.
+Closely coupled private nested implementation types may stay with their owning class.
+
+Build a local NuGet package (no publishing is performed):
+
+```sh
+dotnet pack src/TokenAcquisitionService/TokenAcquisitionService.csproj -c Release
+```
+
+The package includes the library, XML documentation, and this README, but not the local-only
+`docs/*.md` files. Keep one package until independent consumers or adapter dependencies justify
+separate packages; folders alone do not justify additional assemblies.
+
 ## Integration
 
 ```csharp
@@ -37,7 +70,7 @@ var result = await service.AcquireAsync(new TokenRequest(
 `YourSdkAdapter` and `YourDistributedCacheAdapter` are application-owned types, not shipped
 placeholders. `InMemoryTokenCache` is the included thread-safe simulation; register a shared
 instance to simulate separate services. Register the token service as a singleton per process.
-The service owns L1 and gates, not the SDK, L2, logger, or clock.
+The service owns L1, shared flights, shutdown, and SDK permits, not the SDK, L2, logger, or clock.
 
 ## Assumptions and security boundary
 
@@ -54,6 +87,37 @@ The service owns L1 and gates, not the SDK, L2, logger, or clock.
 - The SDK must cooperate with cancellation. Credentials, token persistence protection, eviction,
   and production distributed infrastructure are deliberately outside this exercise.
 
+## Design decisions and trade-offs (Branch 01)
+
+| Decision | Why | Trade-off |
+|---|---|---|
+| Cache-aside | The SDK remains the authoritative token issuer; the service checks caches, acquires on a miss, and explicitly populates L2 then L1. | Acquisition and cache writes are not atomic. Cache writes do not issue tokens, so write-through/write-back do not fit this boundary; write-around would sacrifice reuse. |
+| L1 plus shared L2 | L1 avoids network calls; L2 allows reuse across service instances. | Two cache layers require coordinated expiration, and L1 can temporarily differ between instances. |
+| Immutable context and canonical SHA-256 keys | Snapshot every identity-affecting input, normalize scope order/duplicates, and avoid exposing raw context in keys. | Isolation depends on complete inputs and correct canonicalization. Hashing is not encryption or proof that a cached token is authentic. |
+| Safety buffer and bounded TTLs | Reject nearly expired tokens; cap L2 residence and cap L1 against both its own maximum and L2's `CacheUntil`. | Earlier refreshes increase SDK calls. Freshness holds at the final validation sample, not throughout subsequent caller use. |
+| Per-key asynchronous gates with a cache recheck | Same-key callers serialize without blocking thread-pool threads; waiters reuse a successful fill while unrelated keys proceed independently. | Gates remain allocated until disposal. Failures are not shared results, so later waiters can attempt acquisition again. Coordination is local to one service instance. |
+| Best-effort L2 by default, with strict mode available | A shared-cache failure need not prevent returning a valid SDK-issued token; failures are logged, while cancellation propagates. | An outage reduces shared reuse and can increase SDK load. Strict mode instead propagates L2 failures. |
+| Deterministic fake SDK, cache, and clock | Reproduce expiration boundaries, contention, and distributed races without sleep-based timing. | Unit tests demonstrate the library contract, not real adapter serialization, network behavior, or production infrastructure. |
+
+## Possible improvements and interview extensions
+
+These are not implemented in Branch 01:
+
+1. **Coordinated disposal during active operations:** stop accepting requests, signal shutdown
+   cancellation, and drain admitted operations before disposing L1 and semaphores. Add asynchronous
+   disposal so callers can await cleanup. This prevents resource-use/release races; draining can
+   still wait indefinitely if an SDK or cache dependency ignores cancellation.
+2. **Operational resilience:** add acquisition/L2 deadlines, bounded pending work and physical SDK
+   concurrency, classified retries with backoff, circuit breaking, and metrics. These controls
+   bound load and improve failure visibility, but add configuration and state-machine complexity.
+   A deadline cannot forcibly stop an uncooperative SDK.
+3. **Cross-instance coordination:** add per-key distributed leases, atomic fenced writes, and
+   generation/version checks for invalidation. These reduce duplicate issuance and reject stale
+   publication, but require shared-store atomicity and an explicit coordination-failure policy.
+   Lease expiry still permits duplicate SDK calls; exactly-once issuance requires issuer-side support.
+
+Branches 02 and 03 explore these extensions rather than changing Branch 01's foundation contract.
+
 ## Branch progression
 
 | Branch | Engineering question | Consistency |
@@ -65,15 +129,11 @@ The service owns L1 and gates, not the SDK, L2, logger, or clock.
 Each later branch is based on the completed preceding branch. Branch 1 intentionally exposes
 cross-instance duplicate issuance and older-over-newer writes in deterministic tests.
 There is no exactly-once or issuer-revocation guarantee.
-
-Start with [architecture](docs/ARCHITECTURE.md) and the [interview guide](docs/INTERVIEW_GUIDE.md).
-
 ## Current branch: production resilience
 
 Shared-task singleflight isolates caller cancellation. Service-owned timeouts/shutdown bound fills,
 admission limits bound pending keys, and SDK permits remain held until actual completion.
 L2 deadlines/circuit breaker and classified bounded SDK retries complement the same best-effort
 or strict cache policy. Use async disposal to cancel and drain cooperative adapters.
-See [production resilience](docs/PRODUCTION_RESILIENCE.md),
-[observability](docs/OBSERVABILITY.md), and the [requirements matrix](docs/REQUIREMENTS_MATRIX.md).
+Detailed walkthroughs under `docs/` are local-only and are not included in clones or packages.
 These controls do not fix cross-instance last-writer-wins races.
