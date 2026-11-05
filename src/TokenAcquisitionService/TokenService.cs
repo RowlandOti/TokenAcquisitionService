@@ -59,10 +59,12 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
                     throw new AcquisitionCapacityException();
                 }
                 var candidate = new Flight(this, request, key);
+                // Example: 100 same-key misses select one stored flight; only its lazy task starts.
                 flight = _flights.GetOrAdd(key, candidate);
                 if (!ReferenceEquals(flight, candidate)) Interlocked.Decrement(ref _pendingKeys);
             }
             if (flight.Work.IsValueCreated) _telemetry.Record("lock_contention");
+            // All callers await the same fill without blocking threads; each may cancel only its own wait.
             var token = await flight.Work.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             return Validate(token);
@@ -110,6 +112,7 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         }
         finally
         {
+            // Remove completed or failed work so later callers can recheck caches and retry.
             _flights.TryRemove(new KeyValuePair<string, Flight>(flight.Key, flight));
             Interlocked.Decrement(ref _pendingKeys);
             ExitActivity();
@@ -119,6 +122,7 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     private async Task<TokenResult> FillAsync(string key, TokenRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // Recheck L1 before filling: a completed predecessor may have populated it since the initial miss.
         if (ReadLocal(key) is { } cached) return Validate(cached);
         CacheEnvelope? remote = null;
         try
@@ -128,6 +132,7 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _telemetry.Record("l2_failure", true);
+            // Best effort permits SDK fallback on L2 failure; strict mode and cancellation still propagate.
             if (!_options.BestEffortL2) throw;
             _telemetry.Record("fallback", true);
         }
@@ -154,6 +159,7 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _telemetry.Record("l2_failure", true);
+            // Best effort permits a fresh SDK result and L1 caching despite failed L2 persistence.
             if (!_options.BestEffortL2) throw;
             _telemetry.Record("fallback", true);
         }
@@ -238,6 +244,8 @@ public sealed class TokenService : ITokenService, IDisposable, IAsyncDisposable
     private DateTimeOffset Until(TokenResult token, TimeSpan maximumTtl) =>
         Min(token.ExpiresAt - _options.SafetyBuffer, _time.GetUtcNow() + maximumTtl);
 
+    // Example: At 10:34, L1's five-minute cap allows caching until 10:39. If L2's
+    // CacheUntil is 10:38, Min caps L1 at 10:38: a four-minute TTL, unless token freshness requires less.
     private void WriteLocal(string key, TokenResult token, DateTimeOffset remoteUntil)
     {
         var until = Min(Until(token, _options.L1MaximumTtl), remoteUntil);
