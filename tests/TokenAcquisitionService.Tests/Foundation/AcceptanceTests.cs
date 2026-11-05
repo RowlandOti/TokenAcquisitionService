@@ -129,8 +129,8 @@ public sealed class AcceptanceTests
     [Fact]
     public async Task Sdk_result_expiring_during_acquisition_is_rejected()
     {
-        // Arrange: Hold an SDK response whose token has only two minutes of life.
-        using var h = new Harness();
+        // Arrange: Hold a short-lived SDK result; extend the deadline to test expiry rather than timeout.
+        using var h = new Harness(resilience: new() { AcquisitionTimeout = TimeSpan.FromMinutes(10) });
         var issued = h.Token(minutes: 2);
         var release = Harness.Signal();
         h.Sdk.Handler = async (_, ct) =>
@@ -186,7 +186,7 @@ public sealed class AcceptanceTests
         // Arrange: Restore a successful SDK response.
         h.Sdk.Handler = (_, _) => Task.FromResult(h.Token());
 
-        // Act & Assert: A later request completes without a stranded gate.
+        // Act & Assert: A later request completes because failed shared flights do not remain cached.
         await h.Service.AcquireAsync(Harness.Request());
     }
 

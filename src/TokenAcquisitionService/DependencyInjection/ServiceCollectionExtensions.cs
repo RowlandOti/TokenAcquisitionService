@@ -6,11 +6,12 @@ namespace TokenAcquisitionService;
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddTokenAcquisitionService(this IServiceCollection services,
-        TokenCacheOptions? options = null)
+        TokenCacheOptions? options = null, ResilienceOptions? resilience = null)
     {
         services.TryAddSingleton<TimeProvider>(TimeProvider.System);
         services.AddLogging();
         services.AddSingleton(options ?? new TokenCacheOptions());
+        services.AddSingleton(resilience ?? new ResilienceOptions());
         services.AddSingleton<ITokenService, TokenService>();
         return services;
     }

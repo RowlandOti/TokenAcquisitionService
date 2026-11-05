@@ -30,9 +30,12 @@ src/TokenAcquisitionService/
   Options/               Cache configuration and validation
   Exceptions/            Public exception types
   DependencyInjection/   Service registration
+  Resilience/            L2 deadlines and circuit breaker
+  Diagnostics/           Metrics and fixed-payload logging
   TokenService.cs        Acquisition orchestration and lifecycle
 tests/TokenAcquisitionService.Tests/
   Foundation/            Acceptance, foundation, and cache-boundary tests
+  Resilience/            Lifecycle, deadlines, cancellation, and operational tests
   Support/               Shared harness and one test double per file
 ```
 
@@ -72,7 +75,7 @@ var result = await service.AcquireAsync(new TokenRequest(
 `YourSdkAdapter` and `YourDistributedCacheAdapter` are application-owned types, not shipped
 placeholders. `InMemoryTokenCache` is the included thread-safe simulation; register a shared
 instance to simulate separate services. Register the token service as a singleton per process.
-The service owns L1 and gates, not the SDK, L2, logger, or clock.
+The service owns L1, shared flights, shutdown, and SDK permits, not the SDK, L2, logger, or clock.
 
 ## Assumptions and security boundary
 
@@ -131,3 +134,11 @@ Branches 02 and 03 explore these extensions rather than changing Branch 01's fou
 Each later branch is based on the completed preceding branch. Branch 1 intentionally exposes
 cross-instance duplicate issuance and older-over-newer writes in deterministic tests.
 There is no exactly-once or issuer-revocation guarantee.
+## Current branch: production resilience
+
+Shared-task singleflight isolates caller cancellation. Service-owned timeouts/shutdown bound fills,
+admission limits bound pending keys, and SDK permits remain held until actual completion.
+L2 deadlines/circuit breaker and classified bounded SDK retries complement the same best-effort
+or strict cache policy. Use async disposal to cancel and drain cooperative adapters.
+Detailed walkthroughs under `docs/` are local-only and are not included in clones or packages.
+These controls do not fix cross-instance last-writer-wins races.

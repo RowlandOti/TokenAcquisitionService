@@ -121,28 +121,28 @@ public sealed class FoundationTests
             throw new InvalidOperationException("issuer failed");
         };
 
-        // Act: Start the owner and waiter, then trigger SDK failure.
+        // Act: Start two callers sharing one fill, then trigger SDK failure.
         var first = h.Service.AcquireAsync(Harness.Request());
         await entered.Task;
         var waiting = h.Service.AcquireAsync(Harness.Request());
         fail.SetResult();
 
-        // Assert: Both callers observe the original failure rather than a cached success.
+        // Assert: Both callers observe the shared failure rather than retrying or receiving a cached success.
         await Assert.ThrowsAsync<InvalidOperationException>(() => first);
         await Assert.ThrowsAsync<InvalidOperationException>(() => waiting);
 
         // Arrange: Restore a healthy SDK response.
         h.Sdk.Handler = (_, _) => Task.FromResult(h.Token());
 
-        // Act & Assert: A later request succeeds, proving failures did not poison the gate or caches.
+        // Act & Assert: A later request starts a fresh fill, proving the failed flight and caches were not poisoned.
         Assert.Equal("test-token", (await h.Service.AcquireAsync(Harness.Request())).AccessToken);
-        Assert.Equal(3, h.Sdk.Calls);
+        Assert.Equal(2, h.Sdk.Calls);
     }
 
     [Fact]
     public async Task Cancellation_while_waiting_does_not_cancel_owner_or_block_later_callers()
     {
-        // Arrange: Hold the owner's SDK response so another caller must wait.
+        // Arrange: Hold the shared SDK response so both callers remain waiting.
         using var h = new Harness();
         var release = Harness.Signal();
         h.Sdk.Handler = async (_, ct) =>
@@ -157,41 +157,43 @@ public sealed class FoundationTests
         var waiting = h.Service.AcquireAsync(Harness.Request(), cts.Token);
         cts.Cancel();
 
-        // Assert: The canceled waiter exits without taking ownership of the gate.
+        // Assert: The canceled waiter exits without canceling the shared acquisition.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
 
-        // Act: Release the owner and make a later request.
+        // Act: Complete the shared response, await the initiating caller, and make a later request.
         release.SetResult();
         await owner;
         await h.Service.AcquireAsync(Harness.Request());
 
-        // Assert: The owner stayed active and its cache fill serves the later request.
+        // Assert: Waiter cancellation did not stop the shared fill, which serves the later request.
         Assert.Equal(1, h.Sdk.Calls);
     }
 
     [Fact]
-    public async Task Canceled_owner_releases_gate_and_waiter_rechecks_external_population()
+    public async Task Canceled_initiator_does_not_cancel_shared_acquisition()
     {
-        // Arrange: Keep the owner's SDK acquisition pending until cancellation.
+        // Arrange: Hold the shared SDK response while the initiating caller and another caller wait.
         using var h = new Harness();
-        var never = Harness.Signal();
+        var release = Harness.Signal();
         h.Sdk.Handler = async (_, ct) =>
         {
-            await never.Task.WaitAsync(ct);
+            await release.Task.WaitAsync(ct);
             return h.Token();
         };
         using var cts = new CancellationTokenSource();
 
-        // Act: Queue a waiter, populate L2 externally, and cancel the owner.
+        // Act: Start both callers and cancel only the initiating caller's wait.
         var owner = h.Service.AcquireAsync(Harness.Request(), cts.Token);
         var waiting = h.Service.AcquireAsync(Harness.Request());
-        var key = Harness.Request().CacheKey;
-        await h.Store.SetAsync(key, new(key, h.Token("external"), h.Time.GetUtcNow().AddMinutes(5)), default);
         cts.Cancel();
 
-        // Assert: The owner releases its gate and the waiter reuses the newly populated L2.
+        // Assert: The initiator exits, but shared work remains pending for the other waiter.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => owner);
-        Assert.Equal("external", (await waiting.WaitAsync(TimeSpan.FromSeconds(10))).AccessToken);
+        Assert.False(waiting.IsCompleted);
+        // Act: Complete the shared response.
+        release.SetResult();
+        // Assert: The remaining waiter succeeds with the original single acquisition.
+        Assert.Equal("test-token", (await waiting.WaitAsync(TimeSpan.FromSeconds(10))).AccessToken);
         Assert.Equal(1, h.Sdk.Calls);
     }
 
@@ -282,8 +284,12 @@ public sealed class FoundationTests
     [Fact]
     public async Task Token_expiring_during_L2_read_is_not_returned()
     {
-        // Arrange: Advance fake time to the token's safety cutoff during the L2 read.
-        using var h = new Harness();
+        // Arrange: Reach the safety cutoff during L2 retrieval, with deadlines longer than the simulated delay.
+        using var h = new Harness(resilience: new()
+        {
+            AcquisitionTimeout = TimeSpan.FromMinutes(10),
+            L2Timeout = TimeSpan.FromMinutes(5)
+        });
         var token = h.Token("old", 2);
         h.Cache.Read = (key, _) =>
         {
@@ -299,8 +305,12 @@ public sealed class FoundationTests
     [Fact]
     public async Task Token_expiring_during_write_is_not_returned_or_promoted()
     {
-        // Arrange: Make persistence consume the acquired token's entire usable lifetime.
-        using var h = new Harness();
+        // Arrange: Consume usable lifetime during persistence, with deadlines longer than the simulated delay.
+        using var h = new Harness(resilience: new()
+        {
+            AcquisitionTimeout = TimeSpan.FromMinutes(10),
+            L2Timeout = TimeSpan.FromMinutes(5)
+        });
         h.Sdk.Handler = (_, _) => Task.FromResult(h.Token(minutes: 2));
         h.Cache.Write = (_, _, _) =>
         {
@@ -431,7 +441,7 @@ public sealed class FoundationTests
         // Act: Let the older response complete after the newer write.
         releaseFirst.SetResult();
 
-        // Assert: Local gates allow duplicate issuance and an older L2 overwrite without extending validity.
+        // Assert: Independent local flights allow duplicate issuance and an older L2 overwrite without extending validity.
         Assert.Equal(older, await lateWriter);
         Assert.Equal(2, h.Sdk.Calls);
         var entry = await h.Store.GetAsync(Harness.Request().CacheKey, default);
