@@ -32,12 +32,16 @@ src/TokenAcquisitionService/
   DependencyInjection/   Service registration
   TokenService.cs        Acquisition orchestration and lifecycle
 tests/TokenAcquisitionService.Tests/
+  Foundation/            Acceptance, foundation, and cache-boundary tests
+  Support/               Shared harness and one test double per file
 ```
 
 Each top-level production type has its own file. Folders organize responsibilities while
 public types retain the `TokenAcquisitionService` namespace for source/binary compatibility.
 Later branches add resilience, diagnostics, and distributed-coordination implementation folders.
 Closely coupled private nested implementation types may stay with their owning class.
+Tests remain in one project and keep existing namespaces and AAA explanations; later branches
+add `Resilience/`, `Distributed/`, `Comparisons/`, and `Support/Distributed/` folders.
 
 Build a local NuGet package (no publishing is performed):
 

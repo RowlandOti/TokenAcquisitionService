@@ -3,28 +3,6 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace TokenAcquisitionService.Tests;
 
-internal sealed class FakeSdk : ITokenSdk
-{
-    private int _calls;
-    public int Calls => Volatile.Read(ref _calls);
-    public required Func<TokenRequest, CancellationToken, Task<TokenResult>> Handler { get; set; }
-    public Task<TokenResult> AcquireAsync(TokenRequest request, CancellationToken cancellationToken)
-    {
-        Interlocked.Increment(ref _calls);
-        return Handler(request, cancellationToken);
-    }
-}
-
-internal sealed class CacheDouble(ITokenCache inner) : ITokenCache
-{
-    public Func<string, CancellationToken, Task<CacheEnvelope?>>? Read { get; set; }
-    public Func<string, CacheEnvelope, CancellationToken, Task>? Write { get; set; }
-    public Task<CacheEnvelope?> GetAsync(string key, CancellationToken cancellationToken) =>
-        Read is null ? inner.GetAsync(key, cancellationToken) : Read(key, cancellationToken);
-    public Task SetAsync(string key, CacheEnvelope envelope, CancellationToken cancellationToken) =>
-        Write is null ? inner.SetAsync(key, envelope, cancellationToken) : Write(key, envelope, cancellationToken);
-}
-
 internal sealed class Harness : IDisposable
 {
     public FakeTimeProvider Time { get; } = new(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
